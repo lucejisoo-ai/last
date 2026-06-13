@@ -2,40 +2,59 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 
-st.set_page_config(layout="wide", page_title="Stock Dashboard")
+st.set_page_config(layout="wide", page_title="Professional Stock Analysis")
 
-st.title("📈 한국 주식 분석 대시보드")
+st.title("📈 기업 가치 분석 대시보드")
 
-# 1. 지수 카드
-col1, col2 = st.columns(2)
-with col1: st.metric("KOSPI", f"{yf.Ticker('^KS11').history(period='1d')['Close'].iloc[-1]:,.2f}")
-with col2: st.metric("KOSDAQ", f"{yf.Ticker('^KQ11').history(period='1d')['Close'].iloc[-1]:,.2f}")
+# 1. 종목 데이터 (한국거래소 종목 리스트 로드)
+@st.cache_data
+def get_stock_list():
+    url = "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/master/data/constituents.csv" # 예시용
+    # 실제 환경에서는 한국거래소 상장종목 리스트 csv를 사용하세요.
+    return {"005930": "삼성전자", "000660": "SK하이닉스", "035420": "NAVER", "035720": "카카오"}
 
-# 2. 간단한 종목 검색 (한국 종목 코드 리스트 예시)
-# 실제 서비스 시에는 한국거래소에서 종목리스트 csv를 받아와 활용합니다.
-st.subheader("종목 추가")
-ticker_input = st.text_input("종목 코드 입력 (예: 005930.KS)", placeholder="005930.KS")
+# 2. 분석 계산식
+def calculate_metrics(eps, growth_rate=0.05):
+    graham = eps * 22.5 * 4.4 / 3.5  # 벤저민 그레이엄
+    dcf = eps * ((1 + growth_rate)**10) / (1.08**10) / 0.08 # DCF 간이 계산
+    pv = eps / 0.08 # 절대가치
+    peg = eps * 15 * growth_rate * 100 # PEG 간이 계산
+    return graham, dcf, pv, peg
 
-if 'my_stocks' not in st.session_state:
-    st.session_state.my_stocks = ['005930.KS', '000660.KS']
+# 3. 사이드바 - 종목 검색 및 추가
+st.sidebar.header("종목 추가 (최대 10개)")
+if 'my_stocks' not in st.session_state: st.session_state.my_stocks = []
 
-if st.button("추가"):
-    if ticker_input and ticker_input not in st.session_state.my_stocks:
-        st.session_state.my_stocks.append(ticker_input)
+search = st.sidebar.text_input("종목코드 또는 종목명 검색")
+if st.sidebar.button("추가"):
+    if len(st.session_state.my_stocks) < 10:
+        # 여기에 검색 로직 연동
+        code = f"{search}.KS" if not search.endswith('.KS') else search
+        st.session_state.my_stocks.append(code)
         st.rerun()
+    else:
+        st.sidebar.error("최대 10개까지만 가능합니다.")
 
-# 3. 데이터 테이블
-results = []
-for ticker in st.session_state.my_stocks:
-    try:
-        stock = yf.Ticker(ticker)
-        hist = stock.history(period="1d")
-        results.append({
-            "종목코드": ticker,
-            "현재가": f"{hist['Close'].iloc[-1]:,.0f}원"
-        })
-    except:
-        continue
-
-if results:
-    st.table(pd.DataFrame(results))
+# 4. 결과 테이블 표시
+if st.session_state.my_stocks:
+    data_list = []
+    for ticker in st.session_state.my_stocks:
+        try:
+            stock = yf.Ticker(ticker)
+            info = stock.info
+            hist = stock.history(period="1d")
+            eps = info.get('trailingEps', 0)
+            g, d, p, peg = calculate_metrics(eps)
+            
+            data_list.append({
+                "종목명": info.get('shortName'),
+                "현재가": hist['Close'].iloc[-1],
+                "PER": info.get('trailingPE'),
+                "그레이엄": round(g),
+                "DCF": round(d),
+                "PV": round(p),
+                "PEG": round(peg)
+            })
+        except: continue
+    
+    st.table(pd.DataFrame(data_list))
