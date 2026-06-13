@@ -1,58 +1,55 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
+import dart_fss as dart
 import requests
 from bs4 import BeautifulSoup
 
-st.set_page_config(layout="wide")
+# DART API 키 (본인의 키로 교체하세요)
+DART_API_KEY = "e7901f254435f298ea758cba82c3d814c19b4176"
+dart.set_api_key(api_key=DART_API_KEY)
 
-# 네이버 금융 데이터 크롤링 함수
-def get_investor_data(ticker_code):
-    # 예: https://finance.naver.com/item/frgn.naver?code=005930
-    url = f"https://finance.naver.com/item/frgn.naver?code={ticker_code}"
+st.set_page_config(layout="wide", page_title="통합 분석 대시보드")
+st.title("📈 기업 가치 및 투자자 현황 분석")
+
+# 네이버 매매 현황 크롤링 함수
+def get_naver_investor(code):
+    url = f"https://finance.naver.com/item/frgn.naver?code={code}"
     headers = {"User-Agent": "Mozilla/5.0"}
     res = requests.get(url, headers=headers)
-    soup = BeautifulSoup(res.text, "html.parser")
-    # 네이버 테이블 구조에서 데이터 추출 (간략화)
-    data = pd.read_html(res.text)[1] 
-    return data.head(5) # 최근 5일간 매매 현황
+    return pd.read_html(res.text)[1].head(5)
 
-st.title("📈 올인원 실시간 주식 분석 대시보드")
-
-# 관심종목 관리 (세션 상태)
+# 관심종목 리스트
 if 'watch_list' not in st.session_state: st.session_state.watch_list = []
 
 # 검색 및 추가
-ticker_code = st.sidebar.text_input("종목코드 입력 (예: 005930)")
+ticker = st.sidebar.text_input("종목코드 입력 (예: 005930)")
 if st.sidebar.button("추가"):
-    if len(st.session_state.watch_list) < 10:
-        st.session_state.watch_list.append(ticker_code)
+    if ticker and len(st.session_state.watch_list) < 10:
+        st.session_state.watch_list.append(ticker)
         st.rerun()
 
-# 데이터 분석 및 출력
+# 분석 화면
 for code in st.session_state.watch_list:
     st.divider()
-    col1, col2 = st.columns([1, 1])
-    
-    # 1. 재무 분석 (기존 기능)
-    stock = yf.Ticker(f"{code}.KS")
-    info = stock.info
-    eps = info.get('trailingEps', 0) or 0
-    
-    with col1:
-        st.subheader(f"{info.get('shortName', code)} 분석")
+    # 1. DART 재무 분석
+    corp = dart.get_corp_list().find_by_ticker(code)
+    if corp:
+        fs = corp[0].extract_fs(bgn_de='20250101')[0] # 최근 재무제표
+        eps = fs.loc['당기순이익(손실)'].iloc[0] / 100000000 # 예시: 간단 계산
+        
+        # 4가지 적정주가 비교
         analysis = pd.DataFrame({
             "지표": ["현재가", "PER", "그레이엄", "DCF", "PV", "PEG"],
-            "값": [info.get('currentPrice'), info.get('trailingPE'), 
+            "값": [yf.Ticker(f"{code}.KS").info.get('currentPrice'), 
+                 yf.Ticker(f"{code}.KS").info.get('trailingPE'),
                  round(eps*22.5*4.4/3.5), round(eps*1.5), round(eps/0.08), round(eps*15*0.1*100)]
         })
-        st.table(analysis)
-
-    # 2. 네이버 금융 실시간 매매 현황 (신규 기능)
+    
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        st.subheader(f"재무 분석 ({code})")
+        st.table(analysis if 'analysis' in locals() else "데이터 로딩중")
     with col2:
-        st.subheader("주간 투자자 매매 현황")
-        try:
-            investor_df = get_investor_data(code)
-            st.table(investor_df)
-        except:
-            st.error("데이터 로딩 실패")
+        st.subheader("투자자 매매 현황")
+        st.table(get_naver_investor(code))
