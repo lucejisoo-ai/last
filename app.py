@@ -2,36 +2,50 @@ import streamlit as st
 import yfinance as yf
 import pandas as pd
 
-st.set_page_config(page_title="주식 분석 대시보드", layout="wide")
+st.set_page_config(page_title="주식 대시보드", layout="wide")
 
-st.title("📈 야후 파이낸스 주식 분석 대시보드")
+st.title("📈 한국 주식 실시간 분석 대시보드")
 
-# 종목 코드 입력 (야후는 한국 주식 뒤에 .KS나 .KQ를 붙여야 합니다)
-# 삼성전자: 005930.KS, SK하이닉스: 000660.KS
-tickers = ['005930.KS', '000660.KS', '058970.KS']
+# 1. KOSPI/KOSDAQ 지수 정보
+st.subheader("지수 실시간")
+indices = {'KOSPI': '^KS11', 'KOSDAQ': '^KQ11'}
+idx_cols = st.columns(2)
+for i, (name, ticker) in enumerate(indices.items()):
+    data = yf.Ticker(ticker).history(period="1d")
+    price = data['Close'].iloc[-1]
+    idx_cols[i].metric(name, f"{price:,.2f}")
 
-@st.cache_data(ttl=600)
-def get_data(ticker):
-    stock = yf.Ticker(ticker)
-    info = stock.info
-    hist = stock.history(period="1d")
-    return {
-        "종목명": info.get('shortName'),
-        "현재가": hist['Close'].iloc[-1],
-        "시가총액": info.get('marketCap'),
-        "PER": info.get('trailingPE')
-    }
+st.divider()
 
+# 2. 종목 추가 기능
+if 'my_stocks' not in st.session_state:
+    st.session_state.my_stocks = ['005930.KS', '000660.KS']
+
+new_ticker = st.text_input("종목코드 입력 (예: 005380.KS - 현대차)", placeholder="005380.KS")
+if st.button("추가"):
+    if new_ticker and new_ticker not in st.session_state.my_stocks:
+        st.session_state.my_stocks.append(new_ticker)
+        st.rerun()
+
+# 3. 데이터 표시
+st.subheader("관심 종목 리스트")
 results = []
-for t in tickers:
-    data = get_data(t)
-    if data:
-        results.append(data)
+for ticker in st.session_state.my_stocks:
+    try:
+        stock = yf.Ticker(ticker)
+        info = stock.info
+        hist = stock.history(period="1d")
+        results.append({
+            "종목코드": ticker,
+            "종목명": info.get('shortName', '-'),
+            "현재가": f"{hist['Close'].iloc[-1]:,.0f}원",
+            "PER": info.get('trailingPE', '-')
+        })
+    except:
+        continue
 
 if results:
-    df = pd.DataFrame(results)
-    st.table(df)
-else:
-    st.error("데이터를 불러올 수 없습니다.")
+    st.table(pd.DataFrame(results))
 
-st.info("데이터 출처: Yahoo Finance")
+if st.button("새로고침"):
+    st.rerun()
