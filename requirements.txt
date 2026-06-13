@@ -4,3 +4,4 @@ yfinance
 dart-fss
 beautifulsoup4
 requests
+plotly
