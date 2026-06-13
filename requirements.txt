@@ -4,5 +4,3 @@ yfinance
 dart-fss
 beautifulsoup4
 requests
-pykrx
-matplotlib
