@@ -20,7 +20,7 @@ except Exception:
     st.stop()
 
 st.set_page_config(layout="wide", page_title="Professional Stock Analysis")
-st.title("📈 KIS 실시간 연동 기업 가치 분석")
+st.title("📈 김지수의 주식 연구소")
 
 # 2. KIS 실시간 현재가 조회 함수
 @st.cache_data(ttl=60)
