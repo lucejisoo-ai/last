@@ -2,7 +2,4 @@ streamlit
 pandas
 yfinance
 dart-fss
-beautifulsoup4
-requests
 plotly
-lxml
