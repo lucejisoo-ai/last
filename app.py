@@ -1,69 +1,58 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-import dart_fss as dart
+import requests
+from bs4 import BeautifulSoup
 
-# DART API 설정
-DART_API_KEY = "e7901f254435f298ea758cba82c3d814c19b4176" # Secrets에 저장 권장
-dart.set_api_key(api_key=DART_API_KEY)
+st.set_page_config(layout="wide")
 
-st.set_page_config(layout="wide", page_title="Professional Stock Analysis")
+# 네이버 금융 데이터 크롤링 함수
+def get_investor_data(ticker_code):
+    # 예: https://finance.naver.com/item/frgn.naver?code=005930
+    url = f"https://finance.naver.com/item/frgn.naver?code={ticker_code}"
+    headers = {"User-Agent": "Mozilla/5.0"}
+    res = requests.get(url, headers=headers)
+    soup = BeautifulSoup(res.text, "html.parser")
+    # 네이버 테이블 구조에서 데이터 추출 (간략화)
+    data = pd.read_html(res.text)[1] 
+    return data.head(5) # 최근 5일간 매매 현황
 
-st.title("📈 관심 종목 가치 분석 대시보드")
+st.title("📈 올인원 실시간 주식 분석 대시보드")
 
-# 1. 관심종목 리스트 초기화 (세션 상태)
-if 'watch_list' not in st.session_state:
-    st.session_state.watch_list = []
+# 관심종목 관리 (세션 상태)
+if 'watch_list' not in st.session_state: st.session_state.watch_list = []
 
-# 2. 검색 및 추가 로직
-corp_list = dart.get_corp_list()
-all_corps = {c.corp_name: c.corp_code for c in corp_list}
+# 검색 및 추가
+ticker_code = st.sidebar.text_input("종목코드 입력 (예: 005930)")
+if st.sidebar.button("추가"):
+    if len(st.session_state.watch_list) < 10:
+        st.session_state.watch_list.append(ticker_code)
+        st.rerun()
 
-with st.sidebar:
-    st.header("종목 추가")
-    search = st.selectbox("종목명 검색", [""] + list(all_corps.keys()))
-    if st.button("관심종목 추가"):
-        if search and len(st.session_state.watch_list) < 10:
-            if search not in st.session_state.watch_list:
-                st.session_state.watch_list.append(search)
-                st.rerun()
-        else:
-            st.warning("10개까지만 추가 가능합니다.")
-
-# 3. 데이터 계산 로직
-def get_analysis_data(name):
-    # 실제로는 DART/Yahoo 결합하여 데이터 추출
-    # 여기서는 예시를 위해 가상 데이터를 매핑 (실제 데이터 호출로 대체 필요)
-    ticker = "005930.KS" # 예시 코드
-    stock = yf.Ticker(ticker)
+# 데이터 분석 및 출력
+for code in st.session_state.watch_list:
+    st.divider()
+    col1, col2 = st.columns([1, 1])
+    
+    # 1. 재무 분석 (기존 기능)
+    stock = yf.Ticker(f"{code}.KS")
     info = stock.info
-    eps = info.get('trailingEps', 1000) or 1000
+    eps = info.get('trailingEps', 0) or 0
     
-    # 4가지 계산법
-    graham = eps * 22.5 * 4.4 / 3.5
-    dcf = eps * 1.5 
-    pv = eps / 0.08
-    peg = eps * 15 * 0.1 * 100
-    
-    return {
-        "종목": name,
-        "현재가": info.get('currentPrice', 0),
-        "PER": info.get('trailingPE', 0),
-        "그레이엄": round(graham),
-        "DCF": round(dcf),
-        "PV": round(pv),
-        "PEG": round(peg)
-    }
+    with col1:
+        st.subheader(f"{info.get('shortName', code)} 분석")
+        analysis = pd.DataFrame({
+            "지표": ["현재가", "PER", "그레이엄", "DCF", "PV", "PEG"],
+            "값": [info.get('currentPrice'), info.get('trailingPE'), 
+                 round(eps*22.5*4.4/3.5), round(eps*1.5), round(eps/0.08), round(eps*15*0.1*100)]
+        })
+        st.table(analysis)
 
-# 4. 결과 테이블 출력
-if st.session_state.watch_list:
-    analysis_results = [get_analysis_data(name) for name in st.session_state.watch_list]
-    df = pd.DataFrame(analysis_results)
-    
-    # 삭제 버튼 포함한 테이블 구성
-    for idx, row in df.iterrows():
-        cols = st.columns([0.8, 0.2])
-        cols[0].table(pd.DataFrame([row]))
-        if cols[1].button("삭제", key=f"del_{idx}"):
-            st.session_state.watch_list.pop(idx)
-            st.rerun()
+    # 2. 네이버 금융 실시간 매매 현황 (신규 기능)
+    with col2:
+        st.subheader("주간 투자자 매매 현황")
+        try:
+            investor_df = get_investor_data(code)
+            st.table(investor_df)
+        except:
+            st.error("데이터 로딩 실패")
