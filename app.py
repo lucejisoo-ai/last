@@ -1,17 +1,39 @@
 import streamlit as st
 import pandas as pd
 import dart_fss as dart
+import requests
+import json
 import plotly.express as px
 
-# DART API 설정
+# DART 및 KIS API 설정
 DART_API_KEY = "e7901f254435f298ea758cba82c3d814c19b4176"
 dart.set_api_key(api_key=DART_API_KEY)
 
-st.set_page_config(layout="wide", page_title="DART Professional Analysis")
+# 한국투자증권 API 설정 (Secrets에서 불러오기)
+KIS_KEY = st.secrets["KIS_APP_KEY"]
+KIS_SECRET = st.secrets["KIS_APP_SECRET"]
+BASE_URL = "https://openapi.koreainvestment.com:9443"
 
-st.title("김지수의 주식 연구소")
+st.set_page_config(layout="wide", page_title="Professional Stock Analysis")
+st.title("📈 KIS 실시간 연동 기업 가치 분석")
 
-# 1. 종목 리스트 초기화 및 검색
+# 1. KIS 실시간 현재가 조회 함수
+@st.cache_data(ttl=60) # 1분마다 캐시 갱신
+def get_kis_price(ticker):
+    # 1. 토큰 발급
+    token_url = f"{BASE_URL}/oauth2/tokenP"
+    body = {"grant_type": "client_credentials", "appkey": KIS_KEY, "appsecret": KIS_SECRET}
+    token = requests.post(token_url, data=json.dumps(body)).json()['access_token']
+    
+    # 2. 실시간 시세 조회
+    price_url = f"{BASE_URL}/uapi/domestic-stock/v1/quotations/inquire-price"
+    headers = {"authorization": f"Bearer {token}", "appKey": KIS_KEY, "appSecret": KIS_SECRET, "tr_id": "FHKST01010100"}
+    params = {"fid_cond_mrkt_div_code": "J", "fid_input_iscd": ticker}
+    
+    res = requests.get(price_url, headers=headers, params=params)
+    return int(res.json()['output']['stck_prpr'])
+
+# 2. 종목 리스트 관리
 if 'watch_list' not in st.session_state: st.session_state.watch_list = []
 corp_list = dart.get_corp_list()
 all_corps = {c.corp_name: c.corp_code for c in corp_list}
@@ -23,36 +45,32 @@ with st.sidebar:
             st.session_state.watch_list.append(search)
             st.rerun()
 
-# 2. DART 통합 분석 로직
-def get_dart_data(name):
+# 3. 데이터 분석 로직
+def get_analysis_data(name):
     try:
         corp = corp_list.find_by_corp_name(name)[0]
-        # 재무제표 추출
         fs = corp.extract_fs(bgn_de='20250101')[0]
-        # 당기순이익
         net_income = fs.loc['당기순이익(손실)'].iloc[0]
-        # DART 실시간 주가 (extract_price 사용)
-        price_df = corp.extract_price(bgn_de='20260601') 
-        current_price = price_df['종가'].iloc[-1]
         
-        # 주식 수(지분율 기준 등)는 DART에서 매핑 필요하지만 예시값 사용
+        # 한국투자증권 실시간 현재가 연동 (ticker 활용)
+        current_price = get_kis_price(corp.ticker)
+        
         eps = net_income / 100000000 
         per = current_price / eps if eps != 0 else 0
         
         return {
-            "종목": name, "현재가": round(current_price), "PER": round(per, 2),
+            "종목": name, "현재가": current_price, "PER": round(per, 2),
             "그레이엄": round(eps * 22.5), "DCF": round(eps * 1.5)
         }
-    except:
-        return {"종목": name, "현재가": 0, "PER": "계산불가", "그레이엄": 0, "DCF": 0}
+    except Exception as e:
+        return {"종목": name, "현재가": 0, "PER": "에러", "그레이엄": 0, "DCF": 0}
 
-# 3. 테이블 및 분석 화면
+# 4. 화면 출력
 if st.session_state.watch_list:
-    results = [get_dart_data(name) for name in st.session_state.watch_list]
+    results = [get_analysis_data(name) for name in st.session_state.watch_list]
     st.table(pd.DataFrame(results))
 
-# 4. 수급 및 차트 (기존 기능 유지)
+# 5. 수급 차트
 st.divider()
 st.subheader("시장 투자자 동향")
-chart_data = pd.DataFrame({'개인': [100, 200, 150, 300, 250, 400, 350], '외국인': [-50, -100, 20, 100, 50, -20, 30]})
-st.plotly_chart(px.line(chart_data), use_container_width=True)
+st.plotly_chart(px.line(pd.DataFrame({'개인': [100, 200, 300], '외국인': [-50, 100, 50]})), use_container_width=True)
