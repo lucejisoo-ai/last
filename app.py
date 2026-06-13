@@ -67,35 +67,3 @@ if st.session_state.watch_list:
         if cols[1].button("삭제", key=f"del_{idx}"):
             st.session_state.watch_list.pop(idx)
             st.rerun()
-from pykrx import stock
-import matplotlib.pyplot as plt
-import matplotlib as mpl
-
-# 한글 폰트 설정 (기본적으로 나눔고딕 등이 설치되어 있어야 합니다)
-mpl.rc('font', family='NanumGothic')
-
-st.divider()
-st.title("📊 시장 전체 투자자 동향")
-
-# 1. 일자별 매수/매도 상위 종목 (코스피/코스닥 통합)
-col1, col2 = st.columns(2)
-with col1:
-    st.subheader("금일 기관/외인/개인 매수 상위 5")
-    # 예: KOSPI 기준 상위
-    top_buy = stock.get_market_net_purchases_of_equities_by_ticker(stock.get_nearest_business_day_in_range(), stock.get_nearest_business_day_in_range(), "KOSPI", investor="기관합계")
-    st.dataframe(top_buy.head(5))
-
-# 2. 최근 1주일 투자자별 매매 금액 추이 (꺾은선 그래프)
-st.subheader("최근 1주일 투자자별 매매 추이 (KOSPI)")
-end_date = stock.get_nearest_business_day_in_range()
-start_date = stock.get_nearest_business_day_in_range(start_date=pd.to_datetime(end_date)-pd.Timedelta(days=7))
-
-# 투자자별 합계 가져오기
-investors = ["기관합계", "외국인", "개인"]
-history_data = {}
-for inv in investors:
-    df = stock.get_market_net_purchases_of_equities_by_date(start_date, end_date, "KOSPI", investor=inv)
-    history_data[inv] = df['순매수거래대금']
-
-chart_df = pd.DataFrame(history_data)
-st.line_chart(chart_df)
