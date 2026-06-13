@@ -3,7 +3,7 @@ import dart_fss as dart
 import pandas as pd
 
 # DART API 키 설정 (본인의 키를 넣으세요!)
-DART_API_KEY = e7901f254435f298ea758cba82c3d814c19b4176
+DART_API_KEY = "e7901f254435f298ea758cba82c3d814c19b4176"
 dart.set_api_key(api_key=DART_API_KEY)
 
 st.title("📊 DART 기반 기업 가치 분석")
