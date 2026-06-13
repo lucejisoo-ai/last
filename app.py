@@ -10,8 +10,8 @@ DART_API_KEY = "e7901f254435f298ea758cba82c3d814c19b4176"
 dart.set_api_key(api_key=DART_API_KEY)
 
 # 한국투자증권 API 설정 (Secrets에서 불러오기)
-KIS_KEY = st.secrets["PSEFbh2guyzQoryCO1GpnaHAEzCphPjk2pvx"]
-KIS_SECRET = st.secrets["PSEFbh2guyzQoryCO1GpnaHAEzCphPjk2pvx"]
+KIS_KEY = st.secrets["KIS_APP_KEY"]
+KIS_SECRET = st.secrets["KIS_APP_SECRET"]
 BASE_URL = "https://openapi.koreainvestment.com:9443"
 
 st.set_page_config(layout="wide", page_title="Professional Stock Analysis")
