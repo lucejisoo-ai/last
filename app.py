@@ -1,54 +1,25 @@
 import streamlit as st
-import yfinance as yf
+import dart_fss as dart
 import pandas as pd
 
-st.set_page_config(layout="wide", page_title="Stock Analysis")
+# DART API 키 설정 (본인의 키를 넣으세요!)
+DART_API_KEY = e7901f254435f298ea758cba82c3d814c19b4176
+dart.set_api_key(api_key=DART_API_KEY)
 
-# 1. 한국 주식 데이터 확보 (간이 DB)
-STOCK_DB = {"삼성전자": "005930.KS", "SK하이닉스": "000660.KS", "NAVER": "035420.KS", "카카오": "035720.KS"}
-stock_names = list(STOCK_DB.keys())
+st.title("📊 DART 기반 기업 가치 분석")
 
-st.title("📈 기업 가치 분석 대시보드")
-
-# 2. 자동완성 검색 및 추가
-selected_name = st.selectbox("종목 검색 (종목명 입력)", [""] + stock_names)
-if st.button("추가") and selected_name:
-    ticker = STOCK_DB[selected_name]
-    if ticker not in st.session_state.get('my_stocks', []):
-        st.session_state.my_stocks = st.session_state.get('my_stocks', []) + [ticker]
-        st.rerun()
-
-# 3. 데이터 로딩 및 삭제 로직
-if 'my_stocks' not in st.session_state: st.session_state.my_stocks = ['005930.KS']
-
-data_list = []
-for ticker in st.session_state.my_stocks:
-    stock = yf.Ticker(ticker)
-    info = stock.info
-    # 데이터가 없을 경우를 대비한 get(key, 0) 사용
-    eps = info.get('trailingEps', 0) or 0
-    per = info.get('trailingPE', 0) or 0
-    price = info.get('currentPrice', 0)
+# 1. 기업 찾기
+corp_name = st.text_input("분석할 기업명을 입력하세요 (예: 삼성전자)")
+if st.button("데이터 분석"):
+    corp = dart.get_corp_list().find_by_corp_name(corp_name, exactly=True)[0]
     
-    # 4가지 계산식
-    graham = round(eps * 22.5 * 4.4 / 3.5, 0)
-    dcf = round(eps * 1.5, 0) 
+    # 2. 가장 최근 사업보고서 재무제표 로드
+    fs = corp.extract_fs(bgn_de='20250101') 
+    df = fs[0] # 연결재무제표
     
-    data_list.append({
-        "종목": info.get('shortName', ticker),
-        "현재가": price,
-        "PER": per,
-        "그레이엄": graham,
-        "DCF": dcf
-    })
+    # 3. 데이터 추출 (예시: 당기순이익)
+    # DART 데이터는 '당기순이익' 등을 추출하여 계산식에 적용
+    st.write(df)
+    st.success("데이터 로딩 완료!")
 
-# 4. 테이블 및 삭제 버튼 표시
-if data_list:
-    df = pd.DataFrame(data_list)
-    # 삭제 버튼 구현
-    for i, row in df.iterrows():
-        col1, col2 = st.columns([0.8, 0.2])
-        col1.write(row.to_frame().T)
-        if col2.button(f"❌ 삭제", key=f"del_{i}"):
-            st.session_state.my_stocks.pop(i)
-            st.rerun()
+# 적정주가 계산식 로직은 여기에 DART에서 가져온 값을 변수로 넣으면 됩니다.
