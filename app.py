@@ -9,7 +9,7 @@ dart.set_api_key(api_key=DART_API_KEY)
 
 st.set_page_config(layout="wide", page_title="DART Professional Analysis")
 
-st.title("📈 DART 데이터 기반 기업 가치 분석")
+st.title("김지수의 주식 연구소")
 
 # 1. 종목 리스트 초기화 및 검색
 if 'watch_list' not in st.session_state: st.session_state.watch_list = []
