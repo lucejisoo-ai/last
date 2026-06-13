@@ -4,7 +4,7 @@ import pandas as pd
 import dart_fss as dart
 
 # DART API 키 설정 (보안을 위해 환경변수 사용 권장)
-DART_API_KEY = "본인의_DART_API_KEY"
+DART_API_KEY = "e7901f254435f298ea758cba82c3d814c19b4176"
 dart.set_api_key(api_key=DART_API_KEY)
 
 st.set_page_config(layout="wide", page_title="Professional Stock Dashboard")
