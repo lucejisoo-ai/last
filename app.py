@@ -17,6 +17,8 @@ dart.set_api_key(api_key=DART_API_KEY)
 try:
     KIS_KEY    = st.secrets["KIS_APP_KEY"]
     KIS_SECRET = st.secrets["KIS_APP_SECRET"]
+    # 주의: openapivts는 '모의투자' 도메인입니다. '실전투자' 키를 발급받으셨다면
+    # BASE_URL = "https://openapi.koreainvestment.com:9443" 로 변경해야 토큰이 발급됩니다.
     BASE_URL   = "https://openapivts.koreainvestment.com:29443"
 except Exception:
     st.error("API 키 설정이 없습니다. Streamlit Secrets에 KIS_APP_KEY / KIS_APP_SECRET을 추가하세요.")
@@ -56,20 +58,36 @@ hr         { border-color:#21262d !important; }
 """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# KIS 유틸
+# KIS 유틸 (접근 토큰 발급 및 에러 핸들링 강화)
 # ─────────────────────────────────────────────────────────────────────────────
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=36000) # 토큰 유효기간(24시간)을 고려하여 10시간 캐시
 def get_kis_token():
     url  = f"{BASE_URL}/oauth2/tokenP"
-    body = {"grant_type":"client_credentials","appkey":KIS_KEY,"appsecret":KIS_SECRET}
-    res  = requests.post(url, data=json.dumps(body),
-                         headers={"Content-Type":"application/json"}, timeout=10)
-    return res.json()["access_token"]
+    body = {"grant_type":"client_credentials", "appkey":KIS_KEY, "appsecret":KIS_SECRET}
+    try:
+        res  = requests.post(url, data=json.dumps(body),
+                             headers={"Content-Type":"application/json"}, timeout=10)
+        res_data = res.json()
+        
+        # 정상적으로 토큰을 발급받은 경우
+        if res.status_code == 200 and "access_token" in res_data:
+            return res_data["access_token"]
+        # 토큰 발급에 실패한 경우 에러 메시지 반환
+        else:
+            error_msg = res_data.get('msg1', '알 수 없는 에러')
+            st.sidebar.error(f"🔑 API 인증 실패: {error_msg}")
+            return None
+    except Exception as e:
+        st.sidebar.error(f"🔑 통신 오류 발생: {e}")
+        return None
 
 def kis_headers(tr_id):
-    # [수정포인트] appkey, appsecret 소문자 적용 및 custtype (개인=P) 추가
+    token = get_kis_token()
+    if not token:
+        return {} # 토큰이 없으면 빈 헤더 반환하여 호출 방지
+        
     return {
-        "authorization": f"Bearer {get_kis_token()}",
+        "authorization": f"Bearer {token}",
         "appkey":    KIS_KEY,
         "appsecret": KIS_SECRET,
         "custtype":  "P",
@@ -83,13 +101,16 @@ def kis_headers(tr_id):
 @st.cache_data(ttl=60)
 def get_kis_price(ticker):
     """returns (price:int, label:str)"""
+    headers = kis_headers("FHKST01010100")
+    if not headers:
+        return 0, "API 인증 실패"
+
     # ① 실시간 현재가
     try:
-        # [수정포인트] KIS API 요청 파라미터 Key를 모두 대문자로 변경
         params = {"FID_COND_MRKT_DIV_CODE":"J", "FID_INPUT_ISCD":ticker}
         res    = requests.get(
             f"{BASE_URL}/uapi/domestic-stock/v1/quotations/inquire-price",
-            headers=kis_headers("FHKST01010100"), params=params, timeout=5)
+            headers=headers, params=params, timeout=5)
         out   = res.json().get("output", {})
         price = int(out.get("stck_prpr", 0) or 0)
         if price > 0:
@@ -99,10 +120,10 @@ def get_kis_price(ticker):
 
     # ② 직전 영업일 종가 fallback
     try:
+        headers_fallback = kis_headers("FHKST01010400")
         today    = datetime.today()
         end_dt   = today.strftime("%Y%m%d")
         start_dt = (today - timedelta(days=14)).strftime("%Y%m%d")
-        # [수정포인트] KIS API 요청 파라미터 Key를 모두 대문자로 변경
         params = {
             "FID_COND_MRKT_DIV_CODE": "J",
             "FID_INPUT_ISCD":         ticker,
@@ -113,7 +134,7 @@ def get_kis_price(ticker):
         }
         res  = requests.get(
             f"{BASE_URL}/uapi/domestic-stock/v1/quotations/inquire-daily-price",
-            headers=kis_headers("FHKST01010400"), params=params, timeout=5)
+            headers=headers_fallback, params=params, timeout=5)
         rows = res.json().get("output", [])
         for row in rows:
             close = int(row.get("stck_clpr", 0) or 0)
@@ -134,20 +155,15 @@ KRX_HEADERS = {
 }
 
 def _prev_weekdays(n=5):
-    """오늘 포함 최근 n 영업일(토·일 제외) 날짜 리스트 반환 (최신순)"""
     days, cur = [], datetime.today()
     while len(days) < n:
         if cur.weekday() < 5:
             days.append(cur)
         cur -= timedelta(days=1)
-    return days  # 최신 → 과거 순
+    return days
 
 @st.cache_data(ttl=600)
 def get_krx_investor_flow(market):
-    """
-    KRX 투자자별 거래실적 (일별)
-    market: 'STK'=코스피, 'KSQ'=코스닥
-    """
     url  = "http://data.krx.co.kr/comm/bldAttendant/getJsonData.cmd"
     rows = []
 
@@ -158,10 +174,10 @@ def get_krx_investor_flow(market):
             "locale":     "ko_KR",
             "trdDd":      trd_dd,
             "market":     market,
-            "invstTpCd":  "4",   # 전체
-            "askBid":     "01",  # 순매수
+            "invstTpCd":  "4",
+            "askBid":     "01",
             "share":      "1",
-            "money":      "1",   # 억 원
+            "money":      "1",
             "csvxls_isNo":"false",
         }
         try:
@@ -265,7 +281,6 @@ all_corps = {c.corp_name: c.corp_code for c in corp_list}
 # 종목 분석 — EPS 3단계 fallback + 연도 자동 후퇴
 # ─────────────────────────────────────────────────────────────────────────────
 def _extract_fs_safe(corp):
-    """2025 → 2024 → 2023 순으로 연간 재무제표 시도"""
     for year in [2025, 2024, 2023]:
         try:
             fs_list = corp.extract_fs(bgn_de=f"{year}0101")
@@ -286,12 +301,10 @@ def get_analysis_data(name):
             return {**err, "PER":"기업 없음"}
         corp = results[0]
 
-        # ── 재무제표 ──────────────────────────────────────────────────────────
         fs, fs_year = _extract_fs_safe(corp)
         if fs is None:
             return {**err, "PER":"재무제표 없음"}
 
-        # 당기순이익
         net_income = None
         for lbl in ["당기순이익(손실)","당기순이익","분기순이익(손실)","분기순이익"]:
             if lbl in fs.index:
@@ -303,10 +316,7 @@ def get_analysis_data(name):
         if net_income is None:
             return {**err, "PER":"순이익 없음"}
 
-        # ── EPS 결정 ──────────────────────────────────────────────────────────
         eps = None
-
-        # A. 재무제표 주당순이익 직접 참조
         for lbl in ["주당순이익(기본)","기본주당순이익(손실)","기본주당순이익",
                     "기본주당이익(손실)","기본주당이익"]:
             if lbl in fs.index:
@@ -318,7 +328,6 @@ def get_analysis_data(name):
                 except Exception:
                     continue
 
-        # B. 발행주식수로 직접 계산
         if eps is None:
             for lbl in ["보통주발행주식수","발행주식수","유통보통주식수","보통주식수"]:
                 if lbl in fs.index:
@@ -330,28 +339,25 @@ def get_analysis_data(name):
                     except Exception:
                         continue
 
-        # C. KIS inquire-price 의 eps 필드
-        # [수정포인트] corp.ticker -> corp.stock_code 로 변경 & 파라미터 Key 대문자 변경
         if eps is None and corp.stock_code:
-            try:
-                params = {"FID_COND_MRKT_DIV_CODE":"J", "FID_INPUT_ISCD":corp.stock_code}
-                res    = requests.get(
-                    f"{BASE_URL}/uapi/domestic-stock/v1/quotations/inquire-price",
-                    headers=kis_headers("FHKST01010100"), params=params, timeout=5)
-                out     = res.json().get("output",{})
-                eps_str = str(out.get("eps","0")).replace(",","")
-                if eps_str and eps_str not in ("0",""):
-                    eps = float(eps_str)
-            except Exception:
-                pass
+            headers = kis_headers("FHKST01010100")
+            if headers:
+                try:
+                    params = {"FID_COND_MRKT_DIV_CODE":"J", "FID_INPUT_ISCD":corp.stock_code}
+                    res    = requests.get(
+                        f"{BASE_URL}/uapi/domestic-stock/v1/quotations/inquire-price",
+                        headers=headers, params=params, timeout=5)
+                    out     = res.json().get("output",{})
+                    eps_str = str(out.get("eps","0")).replace(",","")
+                    if eps_str and eps_str not in ("0",""):
+                        eps = float(eps_str)
+                except Exception:
+                    pass
 
-        # ── 현재가 ────────────────────────────────────────────────────────────
         current_price, price_label = (0,"종목코드 없음")
-        # [수정포인트] corp.ticker -> corp.stock_code 로 변경
         if corp.stock_code:
             current_price, price_label = get_kis_price(corp.stock_code)
 
-        # ── PER / 밸류에이션 ──────────────────────────────────────────────────
         per = graham = dcf = None
         if eps and eps != 0 and current_price > 0:
             per    = round(current_price / eps, 2)
@@ -378,6 +384,11 @@ if "watch_list" not in st.session_state:
 
 with st.sidebar:
     st.markdown('<p class="sec-title">📌 관심 종목</p>', unsafe_allow_html=True)
+    
+    # 토큰 발급 상태 시각적 피드백
+    if get_kis_token():
+        st.success("🟢 API 인증 완료")
+    
     search = st.selectbox("종목 검색", [""] + sorted(all_corps.keys()),
                           label_visibility="collapsed")
     if st.button("➕ 추가", use_container_width=True) and search:
@@ -431,81 +442,4 @@ for tab, market, mname in [(tab_kp,"STK","코스피"),(tab_kq,"KSQ","코스닥")
                                 use_container_width=True, key=f"bar_{market}")
             with c2:
                 st.plotly_chart(line_chart(df, f"{mname} 누적 순매수 (억원)"),
-                                use_container_width=True, key=f"cum_{market}")
-            with st.expander("📋 원본 데이터"):
-                fmt = {c: "{:,}" for c in ["외국인","기관","개인"] if c in df.columns}
-                st.dataframe(
-                    df.set_index("날짜").style.format(fmt).map(
-                        lambda v: "color:#3fb950" if v>0 else ("color:#f85149" if v<0 else ""),
-                        subset=[c for c in ["외국인","기관","개인"] if c in df.columns]
-                    ),
-                    use_container_width=True
-                )
-        else:
-            st.warning("KRX에서 수급 데이터를 가져오지 못했습니다. 잠시 후 다시 시도하세요.")
-
-st.markdown("<br>", unsafe_allow_html=True)
-
-# ══════════════════════════════════════════════════════════════════════════════
-# 섹션 B — 관심 종목 분석
-# ══════════════════════════════════════════════════════════════════════════════
-st.markdown('<p class="sec-title">🔍 관심 종목 분석</p>', unsafe_allow_html=True)
-
-if not st.session_state.watch_list:
-    st.markdown("""
-    <div style="background:#161b22;border:1px dashed #30363d;border-radius:8px;
-                padding:32px;text-align:center;color:#8b949e;font-size:0.88rem">
-        왼쪽 사이드바에서 종목을 검색해 추가하면 밸류에이션 분석이 표시됩니다.
-    </div>
-    """, unsafe_allow_html=True)
-else:
-    # 헤더
-    hcols = st.columns([2.4, 1.8, 2.0, 1.4, 2.0, 2.0, 1.0])
-    for hc, lbl in zip(hcols, ["종목","현재가","기준일","PER","그레이엄","DCF",""]):
-        hc.markdown(
-            f'<span style="color:#8b949e;font-size:0.73rem;text-transform:uppercase">{lbl}</span>',
-            unsafe_allow_html=True)
-    st.markdown('<hr style="margin:4px 0 8px">', unsafe_allow_html=True)
-
-    for idx, nm in enumerate(st.session_state.watch_list):
-        with st.spinner(f"{nm} 분석 중…"):
-            d = get_analysis_data(nm)
-
-        # PER 색상
-        per_color = "#c9d1d9"
-        raw_per   = str(d["PER"]).replace("x","")
-        try:
-            pv = float(raw_per)
-            per_color = "#3fb950" if pv<15 else ("#f85149" if pv>30 else "#f0883e")
-        except Exception:
-            pass
-
-        # fs_year 표시 (재무제표 기준연도)
-        yr_badge = ""
-        if d.get("fs_year","-") not in ("-","None"):
-            yr_badge = f' <span style="color:#8b949e;font-size:0.7rem">({d["fs_year"]}년)</span>'
-
-        cols = st.columns([2.4, 1.8, 2.0, 1.4, 2.0, 2.0, 1.0])
-        cols[0].markdown(
-            f'<span style="color:#58a6ff;font-weight:600">{d["종목"]}</span>{yr_badge}',
-            unsafe_allow_html=True)
-        cols[1].markdown(
-            f'<span style="color:#e6edf3;font-weight:700">{d["현재가"]}</span>',
-            unsafe_allow_html=True)
-        cols[2].markdown(
-            f'<span style="color:#8b949e;font-size:0.77rem">{d["기준일"]}</span>',
-            unsafe_allow_html=True)
-        cols[3].markdown(
-            f'<span style="color:{per_color};font-weight:600">{d["PER"]}</span>',
-            unsafe_allow_html=True)
-        cols[4].markdown(
-            f'<span style="color:#3fb950">{d["그레이엄"]}</span>',
-            unsafe_allow_html=True)
-        cols[5].markdown(
-            f'<span style="color:#f0883e">{d["DCF"]}</span>',
-            unsafe_allow_html=True)
-        if cols[6].button("삭제", key=f"del_{idx}"):
-            st.session_state.watch_list.pop(idx)
-            st.rerun()
-
-        st.markdown('<hr style="margin:4px 0">', unsafe_allow_html=True)
+                                use_container_width=True, key=
