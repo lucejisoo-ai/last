@@ -67,10 +67,12 @@ def get_kis_token():
     return res.json()["access_token"]
 
 def kis_headers(tr_id):
+    # [수정포인트] appkey, appsecret 소문자 적용 및 custtype (개인=P) 추가
     return {
         "authorization": f"Bearer {get_kis_token()}",
-        "appKey":    KIS_KEY,
-        "appSecret": KIS_SECRET,
+        "appkey":    KIS_KEY,
+        "appsecret": KIS_SECRET,
+        "custtype":  "P",
         "tr_id":     tr_id,
         "Content-Type": "application/json",
     }
@@ -83,7 +85,8 @@ def get_kis_price(ticker):
     """returns (price:int, label:str)"""
     # ① 실시간 현재가
     try:
-        params = {"fid_cond_mrkt_div_code":"J","fid_input_iscd":ticker}
+        # [수정포인트] KIS API 요청 파라미터 Key를 모두 대문자로 변경
+        params = {"FID_COND_MRKT_DIV_CODE":"J", "FID_INPUT_ISCD":ticker}
         res    = requests.get(
             f"{BASE_URL}/uapi/domestic-stock/v1/quotations/inquire-price",
             headers=kis_headers("FHKST01010100"), params=params, timeout=5)
@@ -99,13 +102,14 @@ def get_kis_price(ticker):
         today    = datetime.today()
         end_dt   = today.strftime("%Y%m%d")
         start_dt = (today - timedelta(days=14)).strftime("%Y%m%d")
+        # [수정포인트] KIS API 요청 파라미터 Key를 모두 대문자로 변경
         params = {
-            "fid_cond_mrkt_div_code":"J",
-            "fid_input_iscd":        ticker,
-            "fid_input_date_1":      start_dt,
-            "fid_input_date_2":      end_dt,
-            "fid_period_div_code":   "D",
-            "fid_org_adj_prc":       "0",
+            "FID_COND_MRKT_DIV_CODE": "J",
+            "FID_INPUT_ISCD":         ticker,
+            "FID_INPUT_DATE_1":       start_dt,
+            "FID_INPUT_DATE_2":       end_dt,
+            "FID_PERIOD_DIV_CODE":    "D",
+            "FID_ORG_ADJ_PRC":        "0",
         }
         res  = requests.get(
             f"{BASE_URL}/uapi/domestic-stock/v1/quotations/inquire-daily-price",
@@ -123,7 +127,6 @@ def get_kis_price(ticker):
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 주간 수급 — KRX 정보데이터시스템 (공개, 인증 불필요)
-# sosok: 1=코스피, 2=코스닥
 # ─────────────────────────────────────────────────────────────────────────────
 KRX_HEADERS = {
     "User-Agent": "Mozilla/5.0",
@@ -144,7 +147,6 @@ def get_krx_investor_flow(market):
     """
     KRX 투자자별 거래실적 (일별)
     market: 'STK'=코스피, 'KSQ'=코스닥
-    returns DataFrame columns=[날짜, 외국인, 기관, 개인]  (억 원 단위 순매수)
     """
     url  = "http://data.krx.co.kr/comm/bldAttendant/getJsonData.cmd"
     rows = []
@@ -169,8 +171,6 @@ def get_krx_investor_flow(market):
             if not arr:
                 continue
 
-            # KRX 응답: 투자자 유형별 행 구조
-            # ISU_NM 없이 전체 합계 행이 올 수도 있음 → isuTpNm 또는 invstNm 키로 파싱
             parsed = {"날짜": dt.strftime("%m/%d"), "외국인": 0, "기관": 0, "개인": 0}
             for item in arr:
                 nm  = (item.get("INVST_TP_NM") or item.get("invstTpNm") or "").strip()
@@ -190,7 +190,7 @@ def get_krx_investor_flow(market):
             continue
 
     if rows:
-        return pd.DataFrame(rows[::-1])  # 오래된 → 최신
+        return pd.DataFrame(rows[::-1])
     return pd.DataFrame(columns=["날짜","외국인","기관","개인"])
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -331,9 +331,10 @@ def get_analysis_data(name):
                         continue
 
         # C. KIS inquire-price 의 eps 필드
-        if eps is None and corp.ticker:
+        # [수정포인트] corp.ticker -> corp.stock_code 로 변경 & 파라미터 Key 대문자 변경
+        if eps is None and corp.stock_code:
             try:
-                params = {"fid_cond_mrkt_div_code":"J","fid_input_iscd":corp.ticker}
+                params = {"FID_COND_MRKT_DIV_CODE":"J", "FID_INPUT_ISCD":corp.stock_code}
                 res    = requests.get(
                     f"{BASE_URL}/uapi/domestic-stock/v1/quotations/inquire-price",
                     headers=kis_headers("FHKST01010100"), params=params, timeout=5)
@@ -345,9 +346,10 @@ def get_analysis_data(name):
                 pass
 
         # ── 현재가 ────────────────────────────────────────────────────────────
-        current_price, price_label = (0,"티커 없음")
-        if corp.ticker:
-            current_price, price_label = get_kis_price(corp.ticker)
+        current_price, price_label = (0,"종목코드 없음")
+        # [수정포인트] corp.ticker -> corp.stock_code 로 변경
+        if corp.stock_code:
+            current_price, price_label = get_kis_price(corp.stock_code)
 
         # ── PER / 밸류에이션 ──────────────────────────────────────────────────
         per = graham = dcf = None
