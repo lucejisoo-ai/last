@@ -17,7 +17,7 @@ dart.set_api_key(api_key=DART_API_KEY)
 try:
     KIS_KEY    = st.secrets["KIS_APP_KEY"]
     KIS_SECRET = st.secrets["KIS_APP_SECRET"]
-    BASE_URL   = "https://openapi.koreainvestment.com:9443"
+    BASE_URL   = "https://openapivts.koreainvestment.com:29443"
 except Exception:
     st.error("API 키 설정이 없습니다. Streamlit Secrets에 KIS_APP_KEY / KIS_APP_SECRET을 추가하세요.")
     st.stop()
