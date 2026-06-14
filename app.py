@@ -18,7 +18,6 @@ except Exception:
 
 # ── KIS API 설정 (에러 시 앱이 멈추지 않도록 안전하게 처리) ──────────────────────
 try:
-    # 실전투자 URL로 셋팅 (개발자센터에서 실전투자용 App Key를 받으셔야 정상작동합니다)
     BASE_URL = "https://openapi.koreainvestment.com:9443"
     if "KIS_APP_KEY" in st.secrets and "KIS_APP_SECRET" in st.secrets:
         KIS_KEY    = st.secrets["KIS_APP_KEY"]
@@ -65,7 +64,7 @@ hr         { border-color:#21262d !important; }
 """, unsafe_allow_html=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
-# KIS 유틸 (캐시 함수 안에서는 절대 화면 출력 코드를 넣지 않음)
+# KIS 유틸 
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_data(ttl=36000)
 def _fetch_kis_token(key, secret, url):
@@ -268,7 +267,7 @@ def kpi_html(df):
     return f'<div class="kpi-grid">{cards}</div>'
 
 # ─────────────────────────────────────────────────────────────────────────────
-# DART 기업 목록 (오류 발생 시 앱 전체가 멈추지 않도록 예외 처리)
+# DART 기업 목록
 # ─────────────────────────────────────────────────────────────────────────────
 @st.cache_resource
 def load_corp_list():
@@ -284,7 +283,7 @@ else:
     all_corps = {c.corp_name: c.corp_code for c in corp_list}
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 종목 분석 — EPS 3단계 fallback + 연도 자동 후퇴
+# 종목 분석 — KIS 현재가 먼저 호출하도록 구조 변경 (핵심 수정 부분)
 # ─────────────────────────────────────────────────────────────────────────────
 def _extract_fs_safe(corp):
     for year in [2025, 2024, 2023]:
@@ -300,54 +299,66 @@ def _extract_fs_safe(corp):
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def get_analysis_data(name):
-    err = {"종목":name,"현재가":"에러","기준일":"-","PER":"-","그레이엄":"-","DCF":"-","fs_year":"-"}
+    result = {"종목":name, "현재가":"조회 실패", "기준일":"-", "PER":"-", "그레이엄":"-", "DCF":"-", "fs_year":"-"}
+    
     if corp_list is None:
-        return {**err, "PER":"DART 초기화 실패"}
+        result["PER"] = "DART 연결 실패"
+        return result
 
     try:
         results = corp_list.find_by_corp_name(name)
         if not results:
-            return {**err, "PER":"기업 없음"}
+            result["PER"] = "기업 없음"
+            return result
+            
         corp = results[0]
 
+        # [수정포인트] 1. DART 재무제표와 무관하게 KIS에서 무조건 현재가부터 가져옵니다.
+        current_price = 0
+        if corp.stock_code:
+            current_price, price_label = get_kis_price(corp.stock_code)
+            if current_price > 0:
+                result["현재가"] = f"₩{current_price:,}"
+                result["기준일"] = price_label
+
+        # [수정포인트] 2. 그 후 DART 재무제표 조회를 시도합니다.
         fs, fs_year = _extract_fs_safe(corp)
-        if fs is None:
-            return {**err, "PER":"재무제표 없음"}
-
-        net_income = None
-        for lbl in ["당기순이익(손실)","당기순이익","분기순이익(손실)","분기순이익"]:
-            if lbl in fs.index:
-                try:
-                    net_income = float(str(fs.loc[lbl].iloc[0]).replace(",",""))
-                    break
-                except Exception:
-                    continue
-        if net_income is None:
-            return {**err, "PER":"순이익 없음"}
-
         eps = None
-        for lbl in ["주당순이익(기본)","기본주당순이익(손실)","기본주당순이익",
-                    "기본주당이익(손실)","기본주당이익"]:
-            if lbl in fs.index:
-                try:
-                    v = float(str(fs.loc[lbl].iloc[0]).replace(",",""))
-                    if v != 0:
-                        eps = v
-                        break
-                except Exception:
-                    continue
-
-        if eps is None:
-            for lbl in ["보통주발행주식수","발행주식수","유통보통주식수","보통주식수"]:
+        
+        if fs is not None:
+            result["fs_year"] = str(fs_year)
+            net_income = None
+            for lbl in ["당기순이익(손실)","당기순이익","분기순이익(손실)","분기순이익"]:
                 if lbl in fs.index:
                     try:
-                        shares = float(str(fs.loc[lbl].iloc[0]).replace(",",""))
-                        if shares > 0:
-                            eps = net_income / shares
+                        net_income = float(str(fs.loc[lbl].iloc[0]).replace(",",""))
+                        break
+                    except Exception:
+                        continue
+            
+            for lbl in ["주당순이익(기본)","기본주당순이익(손실)","기본주당순이익",
+                        "기본주당이익(손실)","기본주당이익"]:
+                if lbl in fs.index:
+                    try:
+                        v = float(str(fs.loc[lbl].iloc[0]).replace(",",""))
+                        if v != 0:
+                            eps = v
                             break
                     except Exception:
                         continue
 
+            if eps is None and net_income is not None:
+                for lbl in ["보통주발행주식수","발행주식수","유통보통주식수","보통주식수"]:
+                    if lbl in fs.index:
+                        try:
+                            shares = float(str(fs.loc[lbl].iloc[0]).replace(",",""))
+                            if shares > 0:
+                                eps = net_income / shares
+                                break
+                        except Exception:
+                            continue
+
+        # 3. DART에서 EPS를 못 구했다면 KIS에서 EPS를 불러옵니다 (Fallback)
         if eps is None and corp.stock_code:
             headers = get_kis_headers("FHKST01010100")
             if headers:
@@ -363,27 +374,25 @@ def get_analysis_data(name):
                 except Exception:
                     pass
 
-        current_price, price_label = (0,"종목코드 없음")
-        if corp.stock_code:
-            current_price, price_label = get_kis_price(corp.stock_code)
-
-        per = graham = dcf = None
-        if eps and eps != 0 and current_price > 0:
+        # 4. 최종 밸류에이션 계산
+        if eps is None:
+            result["PER"] = "재무 정보 없음"
+        elif eps > 0 and current_price > 0:
             per    = round(current_price / eps, 2)
             graham = round(eps * 22.5)
             dcf    = round(eps * 15)
+            
+            result["PER"]      = f"{per:.1f}x"
+            result["그레이엄"] = f"₩{graham:,}"
+            result["DCF"]      = f"₩{dcf:,}"
+        else:
+            result["PER"] = "산출 불가 (적자)"
+            
+        return result
 
-        return {
-            "종목":    name,
-            "현재가":  f"₩{current_price:,}" if current_price else "조회 실패",
-            "기준일":  price_label,
-            "PER":     f"{per:.1f}x" if per else "산출 불가",
-            "그레이엄": f"₩{graham:,}" if graham else "-",
-            "DCF":     f"₩{dcf:,}"   if dcf    else "-",
-            "fs_year": str(fs_year),
-        }
     except Exception as e:
-        return {**err, "PER": f"에러: {e}"}
+        result["PER"] = f"에러: {e}"
+        return result
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 사이드바
@@ -394,7 +403,6 @@ if "watch_list" not in st.session_state:
 with st.sidebar:
     st.markdown('<p class="sec-title">📌 관심 종목</p>', unsafe_allow_html=True)
     
-    # 캐시 밖에서 안전하게 API 연결 상태를 점검하여 사이드바에 출력합니다.
     if not KIS_KEY or not KIS_SECRET:
         st.error("🔴 KIS API Key 미설정 (secrets.toml 확인)")
     elif get_kis_token():
@@ -454,11 +462,9 @@ for tab, market, mname in [(tab_kp,"STK","코스피"),(tab_kq,"KSQ","코스닥")
         if not df.empty:
             c1, c2 = st.columns(2)
             with c1:
-                # 괄호 구문 오류 방지를 위해 변수에 따로 할당
                 fig_bar = bar_chart(df, f"{mname} 일별 순매수 (억원)")
                 st.plotly_chart(fig_bar, use_container_width=True, key=f"bar_{market}")
             with c2:
-                # 괄호 구문 오류 방지를 위해 변수에 따로 할당
                 fig_line = line_chart(df, f"{mname} 누적 순매수 (억원)")
                 st.plotly_chart(fig_line, use_container_width=True, key=f"cum_{market}")
                 
